@@ -1,0 +1,97 @@
+ README
+------------------------------------------------------------
+ Outlines usage and implementation of gitc perl script
+------------------------------------------------------------
+-------
+OVERALL
+-------
+the gitc script runs an interactive mode and several different reports for
+contribution to a git repository. Several flags are also accepted to provide
+additional functionality. Functionality follows the format quoted from the
+usage message:
+
+The Interactive commands:
+  mailmap    Build a mailmap file (see man git-shortlog [MAPPING AUTHORS])
+Non-interactive commands:
+  help       Display this help
+  numstat    Extract contributions using 'git log --numstat'
+  blame      Extract contributions using 'git blame'
+Options:
+  -o f       Output to the file named 'f'
+  -m f       Use the file named 'f' as mailmap
+  -v         Display verbose output to standard error
+
+-------
+MAILMAP
+-------
+The mailmap command brings up an interactive GUI and allows the user to
+input a cononical name and select various authors to link to that name.
+It allows the user to combine the stats of various authors combined
+under a single name.
+
+To use the mailmap merge button, highlight the names which you wish to
+have represented by a different canonical name. Then enter the canonical
+name and canonical email into the corresponding text entry boxes at the
+bottom. Upon hitting merge, the selected names will be removed and the
+canonical name will appear if it was not present previously. This can be
+repeated as many times as wanted.
+
+Upon finishing, hit the "Done" button or close the window and the new
+mailmap file will be created.
+
+In order for the mailmap GUI to do anything the user must select a name
+to merge and provide both a cononical name and a cononical email. If this 
+is not done then an error message will be printed to the terminal and the
+GUI will hold onto previously entered data until another action is made.
+
+----
+HELP
+----
+Runs the usage message for the file to help the user determine how to
+use the script
+
+-------
+NUMSTAT
+-------
+Run through each commit in the git repository and print out a line for
+a CSV file for each commit timestamp. The line equals the total amount
+the lines added and subtracted from all of the files combined, at a
+given time.
+
+-----
+BLAME
+-----
+Run through each file in the git repository and create a line of the
+CSV file for each commit timestamp. The line equals the total amount of
+lines owned by each individual at the time of the commit, accross all
+files.
+
+-----
+FLAGS
+-----
+-v = enables verbose output to give a textual indication of the progress
+     of the script as it is executing its task
+
+-m f = enables the input of a mailmap file with the name f to combine
+       authors into a single column
+
+-o f = enables the output to a specified file with the name f to hold the
+       output CSV or mailmap file
+
+---
+CSV
+---
+see https://tools.ietf.org/html/rfc4180 for structure of CSV file
+
+-------
+MAILMAP
+-------
+see man git-shortlog [MAPPING AUTHORS] for sctructure of the mailmap file
+
+
+
+
+
+
+
+

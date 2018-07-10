@@ -1,0 +1,837 @@
+#!/usr/bin/perl
+#########################################################################
+# Jordan McCaskill
+# CMPT 220 
+# Assignment 3
+# Nick Boers
+#########################################################################
+# Programming Assignment 3
+# Creation of a script to poll a git repository and return to the user
+#  information about the lines contributed or the lines owned by each 
+#  author in the git repository. There is also a way to combine the stats
+#  of individual authors by creating or importing a mailmap.
+# 
+# Script Name:
+#     gitc
+#
+# FINAL EDIT
+#
+#########################################################################
+# The use libraries for the script
+#########################################################################
+#http://perldoc.perl.org/perlrequick.html
+use strict;
+use warnings;
+
+use File::Basename;
+use Getopt::Long;
+use Data::Dumper;
+use Tk;
+#http://learn.perl.org/examples/read_write_file.html
+use autodie; # auto runs the die command on unsucceful file opening
+#########################################################################
+# Setting configuration and single global variable for verbose mode
+#########################################################################
+Getopt::Long::Configure ("bundling"); # allow bundling for getopt flags
+my $verbose;
+
+#########################################################################
+# generateLists
+# Creates the names variable and the nameLink variable which hold the
+# names of the cononical authors and all names linked to their cononical
+# authors repspectively
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     \%opts - values associated with arguments pulled from getopt
+#     \%nameLink - linking authors to their cononical names
+#     \@names - list of canonical authors
+# Returns:
+#     None
+#########################################################################
+sub generateLists($$$) {
+    my ($opts, $nameLink, $names) = @_;
+    @{$names} = `git log --pretty="%an <%ae>" | sort | uniq`;
+    # http://perldoc.perl.org/functions/chomp.html
+    chomp @{$names};
+
+    foreach my $name (@{$names}) {
+        $nameLink->{$name} = $name;
+    }
+
+    if (defined ${$opts}{m}) {
+        parseMailmap($opts, $names, $nameLink);
+    }
+}
+
+#########################################################################
+# csvTitle
+# Creates the first line in the CSV file by concatenating each name onto
+# Date label and then adding it onto the csv variable
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     \@csv - list of each line in the CSV file
+#     \@names - list of canonical authors
+# Returns:
+#     None
+#########################################################################
+sub csvTitle($$) {
+    my ($csv, $names) = @_;
+    my $title = "Date";
+    
+    # pull out each name and add to csv title
+    foreach my $name (@{$names}) {
+        $name =~ /(.+?)\s+<(.*?)>/;
+        $title = "$title,\"$1\"";
+    } 
+    
+    ${$csv}[0] = $title;
+}
+
+#########################################################################
+# nameIndex
+# create the nameIndex variable which holds the counts of lines for each
+# canonical author in the repository
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     \@names - list of canonical authors
+#     \%nameIndex - linking each canonical name to its contribution
+# Returns:
+#     None
+#########################################################################
+sub nameIndex($$) {
+    my ($names, $nameIndex) = @_;
+    
+    for (my $i = 0; $i < @{$names}; $i++) {
+        $nameIndex->{${$names}[$i]} = 0;
+    }
+}
+
+#########################################################################
+# duplicateElim
+# Uses the grep function to eliminate duplicate entries in an array
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     \@names - list of canonical authors
+# Returns:
+#     None
+#########################################################################
+sub duplicateElim($) {
+    my ($names) = @_;
+    #found at http://perldoc.perl.org/perlfaq4.html#How-can-I-remove-
+    #                duplicate-elements-from-a-list-or-array%3f
+    
+    my %seen = ();
+    my @copy = @{$names};
+    @{$names} = grep { ! $seen{ $_ }++ } @copy;
+}
+
+#########################################################################
+# mailmapLineParse
+# Determine the what combination of name and email is present in the line
+# and modify the names array and nameLink hash accordingly. Terminate the
+# script if the line does not match any of the valiud formats.
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     $mmLine - the individual line from the mailmap file
+#     \@names - list of canonical authors
+#     \%nameIndex - linking each canonical name to its contribution
+# Returns:
+#     None
+#########################################################################
+sub mailmapLineParse($$$) {
+    my ($mmLine, $names, $nameLink) = @_;
+
+
+    # for name <email> name <email> replace the second name <email> combo
+    #     with the first name <email>
+    if ($mmLine =~ /(.+?)\s+<(.*)>\s+(.+?)\s+<(.*)>/) {
+        foreach my $name (@{$names}) {
+            if ($name eq "$3 <$4>") {
+                $nameLink->{$name} = "$1 <$2>";
+                $name = "$1 <$2>";
+            }
+        }
+    
+    # for name <email> <email> replace all entries which have the second email
+    #     with the first name <email>
+    } elsif ($mmLine =~ /(.+?)\s+<(.*?)>\s+<(.*?)>/) {
+        my ($val1, $val2, $val3) = ($1, $2, $3);
+        foreach my $name (@{$names}) {
+            if ($name =~ /.*<$val3>/) {
+                $nameLink->{$name} = "$val1 <$val2>";
+                $name = "$val1 <$val2>";
+            }
+        }
+    
+    # for <email> <email> replace the second email occurance with the first
+    #     email
+    } elsif ($mmLine =~ /<(.*?)>\s+<(.*?)>/) {
+        my ($val1, $val2) = ($1,$2);
+        foreach my $name (@{$names}) {
+            if ($name =~ /.*<$val2>/) {
+                $nameLink->{$name} =~ s/<$val2>/<$val1>/;
+                $name =~ s/<$val2>/<$val1>/;
+            }
+        }
+    
+    # for name <email> replace all occurances of the email with the name
+    #     <email> combo
+    } elsif ($mmLine =~ /(.+?)\s+<(.*?)>/) {
+        my ($val1, $val2) = ($1, $2);
+        foreach my $name (@{$names}) {
+            if ($name =~ /.*<$val2>/) {
+                $nameLink->{$name} = "$val1 <$val2>";
+                $name = "$val1 <$val2>";
+            }
+        }
+    
+    # invalid mailmap
+    } else {
+        die "Mailmap formatting is not valid\n";
+    }
+}
+#########################################################################
+# parseMailmap
+# Split apart the mailmap file, change the cononical names of the authors
+# accordingly and delete non-canonical names from the names list
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     \%opts - values associated with arguments pulled from getopt
+#     \@names - list of canonical authors
+#     \%nameLink - linking authors to their cononical names
+# Returns:
+#     None
+#########################################################################
+sub parseMailmap($$) {
+    my ($opts, $names, $nameLink) = @_;
+    # found at http://www.perlfect.com/articles/perlfile.shtml
+    open my $inFile, "<", ${$opts}{m};
+    my @map = <$inFile>;
+    chomp @map;
+    
+    for (my $i = 0; $i < @map; $i++) {
+        mailmapLineParse($map[$i], $names, $nameLink);
+    }
+    
+    duplicateElim($names);
+    close $inFile;
+}
+
+#########################################################################
+# blameIncrement
+# Run blame on each hash/file pair and increment the count of the author
+# who owns each line by one.
+# Description
+# Globals:
+#     $verbose - the flag for verbose mode
+# Arguments:
+#     \%nameLink - linking authors to their cononical names
+#     \%nameIndex - linking each canonical name to its contribution
+#     $hash - a single hash number to process
+#     $fileName - The name of the filename of the git
+# Returns:
+#     None
+#########################################################################
+sub blameIncrement($$$$) {
+    my ($nameLink, $nameIndex, $hash, $fileName) = @_;
+    my $blameAll = `git blame -w --line-porcelain $hash -- $fileName`;
+    
+    if (defined $verbose) {
+        print STDERR "VERBOSE:\t\tRetrieving data for $fileName";
+    } 
+    
+    #pieced together from http://www.perlmonks.org/?node_id=291543
+    my @blameData = $blameAll =~ m/author .*\nauthor-mail <.*>/g;
+    
+    foreach my $data (@blameData) {
+        $data =~ s/author //;
+        $data =~ s/\nauthor-mail//;
+        $data = $nameLink->{$data};
+        $nameIndex->{$data} += 1;
+    }
+}
+
+#########################################################################
+# blameFileLoop
+# Get the files associated with a single hash file and loop through each
+# of them for processing
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     \%nameLink - linking authors to their cononical names
+#     \%nameIndex - linking each canonical name to its contribution
+#     $hash - a single hash number to process
+# Returns:
+#     None
+#########################################################################
+sub blameFileLoop($$$) {
+    my ($nameLink, $nameIndex, $hash) = @_;
+    my @fileNames = `git ls-tree -r --name-only $hash`;
+    my @hashLine;
+    
+    foreach my $fileName (@fileNames) {
+        blameIncrement($nameLink, $nameIndex, $hash, $fileName);
+    }
+}
+
+#########################################################################
+# csvLineMaker
+# Loop through all the names and add the values associated with them onto
+# the end of a string to create the next line for the CSV file
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     \$csvLine - the newest line to be added to the csv file
+#     \%nameIndex - linking each canonical name to its contribution
+#     \@names - list of canonical authors
+#     $blame - a flag for determining if blame is run or not
+# Returns:
+#     None
+#########################################################################
+sub csvLineMaker($$$$) {
+    my ($csvLine, $nameIndex, $names, $blame) = @_;
+    my $num;
+    
+    foreach my $name (@{$names}) {
+        $num = $nameIndex->{$name};
+        ${$csvLine} = "${$csvLine},$num";
+        # Reset the value to zero if it is blame mode
+        $nameIndex->{$name} = 0 if ($blame == 1);
+    }
+}
+
+#########################################################################
+# blameLoopMain
+# Get the hashes for blame mode and loop through each of them for
+# processing
+#
+# Description
+# Globals:
+#     $verbose - the flag for verbose mode
+# Arguments:
+#     \@csv - list of each line in the CSV file
+#     \%nameLink - linking authors to their cononical names
+#     \%nameIndex - linking each canonical name to its contribution
+#     \@hashes - list of all hashes in the repository
+#     \@names - list of canonical authors
+# Returns:
+#     None
+#########################################################################
+sub blameLoopMain($$$$$) {
+    my ($csv, $nameLink, $nameIndex, $hashes, $names) = @_;
+    my $csvLine = "";
+    
+    # Loop through each hash in the repository
+    foreach my $hash (@{$hashes}) {
+        print STDERR "VERBOSE:\tEvaluating $hash\n" if (defined $verbose);
+        
+        #get date line
+        $csvLine = `git log -n1 $hash --pretty="%at"`;
+        chomp $csvLine;
+        
+        blameFileLoop($nameLink, $nameIndex, $hash);
+        csvLineMaker(\$csvLine, $nameIndex, $names, 1);
+        push @{$csv}, $csvLine;
+    }
+}
+
+#########################################################################
+# numstatAdder
+# take each set of changes for a single commit and add it onto the toal
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     \%nameIndex - linking each canonical name to its contribution
+#     $name - a single name associated to process the information for
+#     \@lineData - data from each block of data of the numstat call
+# Returns:
+#     None
+#########################################################################
+sub numstatAdder($$@) {
+    my ($nameIndex, $name, @lineData) = @_;
+    my $num;
+    
+    # add/subtract lines
+    foreach my $line (@lineData) {
+        $line =~ /(\d+)\s+(\d+).*/;
+        $num = $1 - $2;
+        $nameIndex->{$name} += $num;
+    }
+}
+
+#########################################################################
+# numstatParse
+# Take the output of numstat and break it down into individual lines of
+# changes to the line counts of individual authors and the name 
+# associated with them to pass to a function that adds them to the total
+#
+# Description
+# Globals:
+#     $verbose - the flag for verbose mode
+# Arguments:
+#     \%nameLink - linking authors to their cononical names
+#     \%nameIndex - linking each canonical name to its contribution
+#     $hash - a single hash number to process
+# Returns:
+#     None
+#########################################################################
+sub numstatParse($$$) {
+    my ($nameLink, $nameIndex, $hash) = @_;
+    my $commit = `git log -n1 $hash --numstat --pretty="%an <%ae>"`;
+    print STDERR "VERBOSE:\tEvaluating $hash\n" if (defined $verbose);
+    
+    my @lineData = split("\n", $commit);
+    my $name = $lineData[0];
+
+    $name = $nameLink->{$name};
+    shift(@lineData) for 1..2;
+    
+    numstatAdder($nameIndex, $name, @lineData);
+}
+
+#########################################################################
+# numstatLoopMian
+# Retrieve and loop through each hash in the repositroy when run in
+# numstat mode.
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     \@csv - list of each line in the CSV file
+#     \%nameLink - linking authors to their cononical names
+#     \%nameIndex - linking each canonical name to its contribution
+#     \@hashes - list of all hashes in the repository
+#     \@names - list of canonical authors
+# Returns:
+#     None
+#########################################################################
+sub numstatLoopMain($$$$$) {
+    my ($csv, $nameLink, $nameIndex, $hashes, $names) = @_;
+    my $csvLine = "";
+    
+    # Loop through each hash value
+    foreach my $hash (@{$hashes}) {
+        $csvLine = `git log -n1 $hash --pretty="%at"`;
+        chomp $csvLine;
+
+        numstatParse($nameLink, $nameIndex, $hash);
+        csvLineMaker(\$csvLine, $nameIndex, $names, 0);
+        
+        push @{$csv}, $csvLine;
+    }
+}
+
+#########################################################################
+# numstat
+# The main function for running the script when running in numstat mode
+#
+# Description
+# Globals:
+#     $verbose - the flag for verbose mode
+# Arguments:
+#     \@names - list of canonical authors
+#     \%nameLink - linking authors to their cononical names
+# Returns:
+#     $output - string of the joined csv array
+#########################################################################
+sub numstat($$) {
+    my ($names, $nameLink) = @_;
+    my @csv;
+    my %nameIndex = ();
+    print STDERR "VERBOSE: Running numstat mode\n" if (defined $verbose);
+    
+    nameIndex($names, \%nameIndex);
+    csvTitle(\@csv, $names);
+    
+    my @hashes = `git log --pretty="%H" --reverse`;
+    chomp @hashes;
+    
+    numstatLoopMain(\@csv, $nameLink, \%nameIndex, \@hashes, $names);
+
+    return join("\r\n", @csv);
+}
+
+#########################################################################
+# blame
+# The main function for running the script in blame mode
+#
+# Description
+# Globals:
+#     $verbose - the flag for verbose mode
+# Arguments:
+#     \@names - list of canonical authors
+#     \%nameLink - linking the authors to cononical names
+# Returns:
+#     $output - string of the joined csv array
+#########################################################################
+sub blame($$) {
+    my ($names, $nameLink) = @_;
+    my %nameIndex = ();
+    my @csv;
+    print STDERR "VERBOSE: Running blame mode\n" if (defined $verbose);
+    
+    nameIndex($names, \%nameIndex);
+    csvTitle(\@csv, $names);
+    
+    my @hashes = `git log --pretty="%H" --reverse`;
+    chomp @hashes;
+    
+    blameLoopMain(\@csv, $nameLink, \%nameIndex, \@hashes, $names);
+
+    return join("\r\n", @csv);
+}
+
+#########################################################################
+# checkNames
+# Check to make sure that at least a name or email was entered and that
+# the formatting of the final string was correct when one of the two was
+# not entered.
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     $canonName - the cononical name entered
+#     $cononEmail - the cononical email entered
+# Returns:
+#     $finalName - properly formatted canonical name and email string
+#########################################################################
+sub checkNames($$) {
+    my ($canonName, $canonEmail) = @_;
+    my $finalName = "";
+    
+    if ($canonName ne '' and $canonEmail ne '') {
+        $finalName = "$canonName <$canonEmail>";
+    
+    } else {
+        print "Please enter a canon name and email\n";
+    }
+
+    return $finalName;
+}
+
+#########################################################################
+# namesUpdate
+# After the merge function is run by the mailmap function, removes the
+# values which were selected, from the hash table and the names list
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     \@names - list of canonical authors
+#     \%nameLink - hash of all the names linked to their canon name
+#     \@indices - list of the indices of the names selected in the name
+#                 array
+#     $canonName - The canon name for the individuals listed
+# Returns:
+#     None
+#########################################################################
+sub namesUpdate($$$$) {
+    my ($names, $nameLink, $indices, $canonName) = @_;
+    my @keys = keys %{$nameLink};
+    my $targetName;
+    my $repName;
+    my @temp;
+
+    # Loop through each selected name
+    foreach my $index (@{$indices}) {
+        $targetName = ${$names}[$index];
+        
+        # Loop through each value of the hash
+        foreach my $key (@keys) {
+            $repName = $nameLink->{$key};
+    
+            # if the name matches then replace it with the canon name
+            if ($targetName eq $repName) {
+                $nameLink->{$key} = $canonName;
+            }
+        }
+    
+        # found at http://www.perlmonks.org/?node_id=629455
+        @temp = map { s/$targetName/$canonName/g; $_ } @{$names};
+    }
+    
+    duplicateElim($names);
+}
+#########################################################################
+# mergeNames
+# Uses the user submitted data and selections from the GUI to populate
+# the mailmap file
+# 
+# Description
+# Globals:
+#     None
+# Arguments:
+#     $listbox - GUI listbox
+#     \@names - list of canonical names
+#     \%nameLink - linking authors to their cononical names
+#     $nameE - the entry box for the canonical name
+#     $emailE - the entry box for the canonical email
+# Returns:
+#     None
+#########################################################################
+sub mergeNames($$$$$) {
+    my ($listbox, $names, $nameLink, $nameE, $emailE) = @_;
+    my $canonName = $nameE->get;
+    my $canonEmail = $emailE->get;
+    
+    $canonName = checkNames($canonName, $canonEmail);
+    
+    # return if the input is not given
+    return if ($canonName eq "");
+    
+    my @indices = $listbox->curselection;
+    
+    # return if the names werent selected
+    if (@indices == 0) {
+        print "Please select 1 or more names to merge\n";
+        return;
+    }  
+
+    namesUpdate($names, $nameLink, \@indices, $canonName);
+    
+    $nameE->delete(0,'end');
+    $emailE->delete(0,'end');
+}
+
+#########################################################################
+# makeGui
+# Create the GUI for the mailmap mode using the TK module for creating
+# the windows and widgets needed.
+# 
+# Description
+# Globals:
+#     $verbose - the flag for verbose mode
+# Arguments:
+#     \@names - list of cononical authors
+#     \%nameLink - linking authors to their cononical name
+# Returns:
+#     None
+#########################################################################
+sub makeGui($$) {
+    # http://search.cpan.org/~srezic/Tk-804.033/Tk.pod
+    print STDERR "VERBOSE: Creating GUI\n" if (defined $verbose);
+    my ($names, $nameLink) = @_;
+
+    my $mainWindow = MainWindow->new();
+
+    # Create the listbox for selecting authors
+    my $listbox = $mainWindow
+            ->Listbox(-listvariable => $names, 
+                      -selectmode => "multiple",
+                      -width => 75)
+            ->pack(-side => "top");
+    
+    # Create the frame for holding the widgets
+    my $frame = $mainWindow->Frame()->pack();
+
+    # creat the Canon Name label
+    $frame->Label(-text => "Canon Name")->grid(-row => 0,
+                                               -column => 0);
+    
+    # Create the Canon name entry box
+    my $nameE = $frame
+            ->Entry()
+            ->grid(-row => 1,
+                   -column => 0);
+    
+    # Create the email entry
+    my $emailE = $frame
+            ->Entry()
+            ->grid(-row => 1,
+                   -column => 1);
+
+    # Create the Merge button
+    $frame->Button(-text => "Merge",
+                   -command => [ \&mergeNames,
+                                 $listbox,
+                                 $names,
+                                 $nameLink,
+                                 $nameE,
+                                 $emailE])
+            ->grid(-row => 2,
+                   -column => 0);
+    
+    # Create the email label
+    $frame->Label(-text => "Canon Email")
+            ->grid(-row => 0,
+                   -column => 1);
+    
+    # Create the Done button
+    $frame->Button(-text => "Done", 
+                   -command => [$mainWindow => 'destroy'])
+            ->grid(-row => 2,
+                   -column => 1);
+
+    MainLoop();
+}
+
+#########################################################################
+# mailmapFile
+# Generate the mailmap file from the nameLink hash
+#
+# Description
+# Globals:
+#     $verbose - the flag for verbose mode
+# Arguments:
+#     \@names - list of canonical authors
+#     \%nameLink - linking authors to their canonical names
+# Returns:
+#     None
+#########################################################################
+sub mailmapFile($$) {
+    my ($mailmap, $nameLink) = @_;
+    my @keys = keys %{$nameLink};
+    my $mailmapLine;
+    my $canonName;
+    
+    # Loop through all the keys
+    foreach my $key (@keys) {
+        # If the key is not the same as the value then output
+        if ($key ne $nameLink->{$key}) {
+            $canonName = $nameLink->{$key};
+            $mailmapLine = "$canonName $key";
+
+            if (defined $verbose) {
+                print STDERR "VERBOSE:\tMerging $key to $canonName\n";
+            }  
+            push(@{$mailmap}, $mailmapLine);
+        }
+    }
+
+}
+
+#########################################################################
+# mailmap
+# The main execution function for the script when run in mailmap mode
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     \@names - list of canonical names
+#     \%nameLink - linking authors to their canonical names
+# Returns:
+#     $output - joined string of the mailmap file
+#########################################################################
+sub mailmap($$$) {
+    my ($names, $nameLink, $opts) = @_;
+    my @mailmap;
+    
+    makeGui($names, $nameLink);
+    mailmapFile(\@mailmap, $nameLink);
+
+    $opts->{o} = 'mailmap' if (! defined $opts->{o});
+
+    return join("\n", @mailmap)
+}
+
+#########################################################################
+# usage
+# Displays the usage message which provides a brief overview of the way
+# the script can be run and what it accepts.
+#
+# Description
+# Globals:
+#     None
+# Arguments:
+#     None
+# Returns:
+#     None
+#########################################################################
+sub usage() {
+    my $name = basename($0);
+    
+    print STDERR <<MESSAGE;
+usage: /$name [options] <command>\n
+Interactive commands:\n
+  mailmap    Build a mailmap file (see man git-shortlog [MAPPING AUTHORS])\n
+Non-interactive commands:\n
+  help       Display this help
+  numstat    Extract contributions using 'git log --numstat'
+  blame      Extract contributions using 'git blame'\n
+Options:
+  -o f       Output to the file named 'f'
+  -m f       Use the file named 'f' as mailmap
+  -v         Display verbose output to standard error\n
+MESSAGE
+    exit(1);
+}
+
+#########################################################################
+# main
+# The main program function which parses the getopts options and then 
+# runs the portion of the program associated with the command enterd
+#
+# Globals:
+#     $verbose - the flag for verbose mode
+# Arguments:
+#     @_ - the list of arguments to the command line
+# Returns:
+#     None
+#########################################################################
+sub main(@) {
+    # adapted from http://perldoc.perl.org/Getopt/Long.html
+    my %opts = ();
+    my %nameLink = ();
+    my @names = ();
+    
+    GetOptions (\%opts,'o=s',
+                       'm=s',
+                       'v' => \$verbose) or
+        die "error processing arguments";
+
+    # run the usage if a valid entry is not run
+    usage() if (@ARGV != 1 or 
+                $ARGV[0] ne 'mailmap' and 
+                $ARGV[0] ne 'numstat' and
+                $ARGV[0] ne 'blame');
+
+
+    generateLists(\%opts, \%nameLink, \@names);
+    
+    my $output;
+    $output = numstat(\@names, \%nameLink) if ($ARGV[0] eq 'numstat');
+    $output = blame(\@names, \%nameLink) if ($ARGV[0] eq 'blame');
+    $output = mailmap(\@names, \%nameLink, \%opts) if ($ARGV[0] eq 'mailmap');
+
+    # output to file if the flag is set
+    if (defined $opts{o}) {
+        open my $outFile, ">", $opts{o};   
+        print $outFile $output;
+        close $outFile;
+    
+    } else {
+        print "$output\n";
+    }
+
+    print STDERR "VERBOSE: DONE\n" if (defined $verbose);
+}
+
+main("@_");
